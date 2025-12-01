@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>URL Shortener — Simple UI</title>
+  <style>
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial;display:flex;min-height:100vh;align-items:center;justify-content:center;background:#f7fafc;margin:0}
+    .card{background:white;padding:24px;border-radius:12px;box-shadow:0 8px 30px rgba(2,6,23,0.08);width:680px;max-width:92%}
+    h1{margin:0 0 12px;font-size:18px}
+    label{display:block;margin-bottom:6px;font-weight:600}
+    input[type=text]{width:100%;padding:10px;border-radius:8px;border:1px solid #e3e8ef;font-size:14px}
+    button{padding:10px 14px;border-radius:8px;border:0;background:#0f62fe;color:white;font-weight:700;cursor:pointer;margin-top:8px}
+    .muted{color:#536179;font-size:13px}
+    .result{margin-top:16px;padding:12px;border-radius:8px;background:#f1f5f9}
+    .row{display:flex;gap:8px;align-items:center}
+    .small{font-size:13px}
+    a.short{font-weight:700;color:#0f62fe;text-decoration:none}
+    .error{color:#b91c1c}
+    footer{margin-top:14px;font-size:12px;color:#64748b}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>URL Shortener — простой интерфейс</h1>
+    <p class="muted">Вставьте длинный URL — сервер вернёт короткий slug. Нажмите ссылку, чтобы перейти (сервер сделает редирект).</p>
+
+    <form id="shortenForm">
+      <label for="longUrl">Длинный URL</label>
+      <input id="longUrl" type="text" placeholder="https://example.com/very/long/path" required />
+      <div class="row">
+        <button id="makeBtn" type="submit">Создать короткий URL</button>
+        <div style="margin-left:auto;text-align:right">
+          <div class="muted small">POST /short_url</div>
+          <div class="small muted">Backend: <span id="backendHost"></span></div>
+        </div>
+      </div>
+    </form>
+
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+      <label class="small muted" style="width:120px">Backend origin</label>
+      <input id="backendOverride" type="text" placeholder="(auto) http://localhost:8000" style="flex:1;padding:8px;border-radius:6px;border:1px solid #e3e8ef" />
+      <button id="applyBackend" type="button" style="padding:8px 10px;border-radius:6px">Применить</button>
+    </div>
+
+    <div id="output" class="result" style="display:none">
+      <div id="status" class="small muted"></div>
+      <div id="slugLine" style="margin-top:8px"></div>
+      <div id="errorLine" class="error small" style="margin-top:8px"></div>
+      <div style="margin-top:10px;font-size:13px;color:#374151">Пример: откройте короткий URL в новой вкладке или используйте кнопку <strong>Проверить</strong> чтобы увидеть куда он редиректит (переадресацию выполняет сервер).</div>
+
+      <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+        <button id="openBtn">Открыть короткий URL</button>
+        <button id="previewBtn" type="button">Проверить (HEAD)</button>
+        <div id="previewResult" class="small muted"></div>
+      </div>
+    </div>
+
+    <footer>Локальные серверы: откройте этот файл рядом с запущенным backend (тот же origin) или используйте браузерный Live Server.</footer>
+  </div>
+
+<script>
+(function(){
+  const form = document.getElementById('shortenForm');
+  const longUrl = document.getElementById('longUrl');
+  const output = document.getElementById('output');
+  const status = document.getElementById('status');
+  const slugLine = document.getElementById('slugLine');
+  const errorLine = document.getElementById('errorLine');
+  const openBtn = document.getElementById('openBtn');
+  const previewBtn = document.getElementById('previewBtn');
+  const previewResult = document.getElementById('previewResult');
+
+  let currentSlug = null;
+
+  // Backend origin selection:
+  // - If you are serving the UI from the same origin as the backend, leave it blank
+  // - If you run the UI with a static server (e.g. python -m http.server on :5500)
+  //   set BACKEND_ORIGIN to the backend host (default http://localhost:8000)
+  const BACKEND_ORIGIN = (function(){
+    // Use an explicit backend host in these common dev cases
+    // If UI served via file:// (origin === 'null') default to http://localhost:8000
+    if(window.location.origin === 'null') return 'http://localhost:8000';
+    // If UI is served from a different port than backend (common: :5500 vs :8000),
+    // use localhost:8000 as backend origin so fetch doesn't post to your static server.
+    if(window.location.port && window.location.port !== '8000') return window.location.protocol + '//' + window.location.hostname + ':8000';
+    // Otherwise assume the backend is hosted on the same origin
+    return window.location.origin.replace(/\/$/, '');
+  })();
+
+  function hostForSlug(slug){
+    const backend = (window.__BACKEND_OVERRIDE || BACKEND_ORIGIN).replace(/\/$/, '');
+    return backend + '/' + encodeURIComponent(slug);
+  }
+
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    errorLine.textContent = '';
+    previewResult.textContent = '';
+    status.textContent = 'Отправка…';
+    slugLine.innerHTML = '';
+    output.style.display = '';
+
+    const url = longUrl.value.trim();
+    if(!url){ status.textContent = ''; errorLine.textContent = 'Введите URL'; return; }
+
+    try{
+      // Use absolute path to backend so the request goes to the API, not your static file server
+      const backend = (window.__BACKEND_OVERRIDE || BACKEND_ORIGIN).replace(/\/$/, '');
+      const res = await fetch(backend + '/short_url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ long_url: url })
+      });
+
+      if(!res.ok){
+        const text = await res.text();
+        throw new Error('Ошибка сервера: ' + res.status + ' — ' + text);
+      }
+
+      const data = await res.json();
+      const slug = data?.data;
+      if(!slug){ throw new Error('Неверный ответ от сервера'); }
+
+      currentSlug = slug;
+      const full = hostForSlug(slug);
+      status.textContent = 'Готово — slug создан';
+      slugLine.innerHTML = '<div>Slug: <strong>' + escapeHtml(slug) + '</strong></div>' +
+        '<div style="margin-top:6px">Короткая ссылка: <a class="short" href="' + full + '" target="_blank" rel="noopener">' + full + '</a></div>';
+
+    }catch(err){
+      console.error(err);
+      errorLine.textContent = err.message || 'Не удалось создать короткий URL';
+      status.textContent = '';
+      currentSlug = null;
+    }
+  });
+
+  openBtn.addEventListener('click', ()=>{
+    if(!currentSlug){ errorLine.textContent = 'Сначала создайте slug.'; return; }
+    const url = hostForSlug(currentSlug);
+    window.open(url, '_blank');
+  });
+
+  // Try to check where the slug redirects using a HEAD request.
+  previewBtn.addEventListener('click', async ()=>{
+    previewResult.textContent = '';
+    if(!currentSlug){ previewResult.textContent = 'Сначала создайте slug.'; return; }
+    const url = hostForSlug(currentSlug);
+
+    try{
+      // Fetch with redirect: "manual" may be blocked by browsers in many cases — this is a best-effort preview.
+      const resp = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+      previewResult.textContent = 'HTTP ' + resp.status + (resp.redirected ? ' — переадресация' : '');
+    }catch(e){
+      previewResult.textContent = 'Невозможно проверить (CORS/редирект). Откройте ссылку в новой вкладке.';
+    }
+  });
+
+  function escapeHtml(s){ return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+  // UI: show backend host and let user override it for testing
+  function setBackendDisplay(){
+    const el = document.getElementById('backendHost');
+    if(!el) return;
+    const override = window.__BACKEND_OVERRIDE || '';
+    el.textContent = override || BACKEND_ORIGIN;
+  }
+
+  const backendOverride = document.getElementById('backendOverride');
+  const applyBackend = document.getElementById('applyBackend');
+  // initialize
+  if(backendOverride) backendOverride.value = '';
+  applyBackend?.addEventListener('click', ()=>{
+    const val = backendOverride?.value.trim() || '';
+    window.__BACKEND_OVERRIDE = val ? val.replace(/\/$/, '') : null;
+    setBackendDisplay();
+  });
+  setBackendDisplay();
+})();
+</script>
+</body>
+</html>
