@@ -28,7 +28,7 @@ uvicorn>=0.38.0
 
 ## Установка и запуск
 ```
-git clone https://github.com/username/project.git
+git clone https://github.com/dmitrych2/URL-Shortener-FastAPI.git
 cd project
 ```
 
@@ -49,7 +49,7 @@ http://localhost:8000/docs
 
 ## Структура проекта
 ```
-.
+.url_shortener
 ├── docker-compose.yaml        # Docker-компоуз для запуска приложения и PostgreSQL
 ├── pyproject.toml             # Конфигурация зависимостей (uv)
 ├── requirements.txt           # Альтернативный способ установки зависимостей (pip)
